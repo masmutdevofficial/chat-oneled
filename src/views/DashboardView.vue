@@ -57,6 +57,7 @@ type UnreadCandidate = {
 type ThreadItem =
   | { divider: string }
   | {
+  id?: number
       side: 'left' | 'right'
       text?: string
       time?: string
@@ -67,7 +68,7 @@ type ThreadItem =
       // message status for right side only
       status?: MessageStatus
       // reply context
-      replyTo?: { side: 'left' | 'right'; textSnippet: string }
+      replyTo?: { side: 'left' | 'right'; textSnippet: string; refId?: number }
     }
 
 // Conversations loaded from backend
@@ -88,7 +89,10 @@ const searchQuery = ref('')
 const showEmoji = ref(false)
 const showAttach = ref(false)
 const replyTo = ref<null | { side: 'left' | 'right'; textSnippet: string }>(null)
+const replyTargetId = ref<number | null>(null)
 const selectedFiles = ref<Attachment[]>([])
+// Highlighted message ids for jump-to effect
+const highlighted = ref<Set<number>>(new Set())
 // Attachment preview modal state
 const isPreviewOpen = ref(false)
 const previewType = ref<'image' | 'pdf' | null>(null)
@@ -375,15 +379,31 @@ async function switchConversation(id: string) {
   try {
     const cid = Number(id)
     const items = await ChatApi.listMessages(cid, 30)
+    const byId = new Map(items.map((m) => [Number(m.id), m]))
     const mapped: ThreadItem[] = items
       .slice()
       .reverse()
       .map((m) => ({
+        id: m.id,
         side: m.sender_id === currentUserId.value ? 'right' : 'left',
         text: m.body || undefined,
         time: formatTime(m.created_at),
         attachments: (m.attachments || []).map((a) => ({ type: a.type, url: a.url, name: a.file_name || undefined })),
       }))
+    for (let i = 0; i < mapped.length; i++) {
+      const original = items[items.length - 1 - i]
+      if (!original) continue
+      if (original.reply_to_message_id) {
+        const ref = byId.get(Number(original.reply_to_message_id))
+        if (ref) {
+          const refSide: 'left' | 'right' = ref.sender_id === currentUserId.value ? 'right' : 'left'
+          const firstAtt = (ref.attachments || [])[0]
+          const snippet = ref.body || (firstAtt ? firstAtt.file_name || firstAtt.type : '') || ''
+          const current = mapped[i] as Extract<ThreadItem, { side: 'left' | 'right' }>
+          mapped[i] = { ...current, replyTo: { side: refSide, textSnippet: truncate(snippet, 20), refId: Number(original.reply_to_message_id) } } as ThreadItem
+        }
+      }
+    }
     threads[id] = mapped
 
     // mark read now
@@ -403,15 +423,31 @@ async function refreshActiveThread() {
   const cid = Number(activeId.value)
   try {
     const items = await ChatApi.listMessages(cid, 30)
+    const byId = new Map(items.map((m) => [Number(m.id), m]))
     const mapped: ThreadItem[] = items
       .slice()
       .reverse()
       .map((m) => ({
+        id: m.id,
         side: m.sender_id === currentUserId.value ? 'right' : 'left',
         text: m.body || undefined,
         time: formatTime(m.created_at),
         attachments: (m.attachments || []).map((a) => ({ type: a.type, url: a.url, name: a.file_name || undefined })),
       }))
+    for (let i = 0; i < mapped.length; i++) {
+      const original = items[items.length - 1 - i]
+      if (!original) continue
+      if (original.reply_to_message_id) {
+        const ref = byId.get(Number(original.reply_to_message_id))
+        if (ref) {
+          const refSide: 'left' | 'right' = ref.sender_id === currentUserId.value ? 'right' : 'left'
+          const firstAtt = (ref.attachments || [])[0]
+          const snippet = ref.body || (firstAtt ? firstAtt.file_name || firstAtt.type : '') || ''
+          const current = mapped[i] as Extract<ThreadItem, { side: 'left' | 'right' }>
+          mapped[i] = { ...current, replyTo: { side: refSide, textSnippet: truncate(snippet, 20), refId: Number(original.reply_to_message_id) } } as ThreadItem
+        }
+      }
+    }
     threads[activeId.value] = mapped
     // Since conversation is open, mark as read
     await ChatApi.markRead(cid)
@@ -533,7 +569,7 @@ async function sendMessage() {
       }))
       atts = uploaded
     }
-    await ChatApi.sendMessage(cid, { body: text || undefined, attachments: atts })
+  await ChatApi.sendMessage(cid, { body: text || undefined, replyToMessageId: replyTargetId.value ?? undefined, attachments: atts })
 
     // update conversation preview/time
     const conv = conversations.find((c) => c.id === activeId.value)
@@ -556,6 +592,7 @@ async function sendMessage() {
     msgInput.value = ''
     selectedFiles.value = []
     replyTo.value = null
+    replyTargetId.value = null
     showEmoji.value = false
     showAttach.value = false
   }
@@ -584,10 +621,23 @@ function onSelectEmoji(e: string) {
 }
 
 function startReply(m: Extract<ThreadItem, { side: 'left' | 'right' }>) {
-  const msg = m as Exclude<ThreadItem, { divider: string }>
+  const msg = m as Extract<ThreadItem, { side: 'left' | 'right' }>
   const firstAtt = msg.attachments && msg.attachments.length ? msg.attachments[0] : undefined
   const text = msg.text || (firstAtt ? firstAtt.name || firstAtt.type : '') || ''
   replyTo.value = { side: m.side, textSnippet: truncate(text, 20) }
+  replyTargetId.value = typeof msg.id === 'number' ? msg.id : null
+}
+
+function jumpToMessage(refId: number) {
+  if (!refId) return
+  const el = document.getElementById(`msg-${refId}`)
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    highlighted.value.add(refId)
+    window.setTimeout(() => {
+      highlighted.value.delete(refId)
+    }, 1200)
+  }
 }
 
 function openAttachment(type: 'image' | 'pdf', url: string, name = '') {
@@ -1006,14 +1056,20 @@ async function dismissNotification(id: string) {
               />
               <div
                 class="max-w-[min(520px,75%)] px-3 py-2.5 rounded-2xl rounded-tl-md shadow-lg whitespace-pre-wrap wrap-break-word"
-                :class="
+                :id="m.id ? `msg-${m.id}` : undefined"
+                :class="[
                   m.side === 'right'
                     ? 'justify-self-end bg-indigo-900 text-white'
-                    : 'bg-[#eef4ff] text-slate-800 dark:bg-slate-700 dark:text-slate-100'
-                "
-                @click="startReply(m)"
+                    : 'bg-[#eef4ff] text-slate-800 dark:bg-slate-700 dark:text-slate-100',
+                  (typeof m.id === 'number' && highlighted.has(m.id)) ? 'ring-2 ring-yellow-400' : ''
+                ]"
               >
-                <div v-if="m.replyTo" class="mb-1 border-l-2 pl-2 text-xs opacity-80">
+                <div
+                  v-if="m.replyTo"
+                  class="mb-1 border-l-2 pl-2 text-xs opacity-80 cursor-pointer hover:underline"
+                  @click.stop="m.replyTo?.refId && jumpToMessage(m.replyTo.refId)"
+                  title="Jump to replied message"
+                >
                   Replying to {{ m.replyTo.side === 'right' ? 'you' : activePeer?.name }}:
                   {{ m.replyTo.textSnippet }}
                 </div>
@@ -1070,6 +1126,15 @@ async function dismissNotification(id: string) {
                     <MdiCheckAll v-else-if="m.status === 'delivered'" class="text-[12px]" />
                     <MdiCheckAll v-else class="text-[12px] text-blue-300" />
                   </template>
+                </div>
+                <div
+                  v-if="'side' in m"
+                  class="mt-0.5 text-[11px]"
+                  :class="m.side === 'right' ? 'text-white/70 text-right' : 'text-slate-500 text-left'"
+                >
+                  <button type="button" class="hover:underline cursor-pointer" @click.stop="startReply(m)">
+                    Reply
+                  </button>
                 </div>
               </div>
             </div>
