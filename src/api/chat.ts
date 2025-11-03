@@ -108,6 +108,9 @@ export const ChatApi = {
       body: JSON.stringify(body),
     }).then((d) => (Array.isArray(d) ? (d[0] as Created) : d))
   },
+  deleteConversation(conversationId: number) {
+    return http<unknown>(`/api/conversations/${conversationId}`, { method: 'DELETE' }).then(() => undefined)
+  },
   listMessages(conversationId: number, limit = 20, cursor?: string) {
     const q = new URLSearchParams({ limit: String(limit) })
     // Cursor is currently not used by the backend; kept for forward compatibility

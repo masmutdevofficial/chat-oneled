@@ -2,8 +2,6 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ChatApi, type ConversationItem, type MessageAttachment } from '../api/chat'
-import MdiMagnify from '~icons/mdi/magnify'
-import MdiHeartOutline from '~icons/mdi/heart-outline'
 import MdiEmoticonOutline from '~icons/mdi/emoticon-outline'
 import MdiPaperclip from '~icons/mdi/paperclip'
 import MdiSend from '~icons/mdi/send'
@@ -15,6 +13,7 @@ import MdiFilePdfBox from '~icons/mdi/file-pdf-box'
 import MdiBellOutline from '~icons/mdi/bell-outline'
 import MdiWeatherNight from '~icons/mdi/weather-night'
 import MdiWhiteBalanceSunny from '~icons/mdi/white-balance-sunny'
+import MdiTrashCanOutline from '~icons/mdi/trash-can-outline'
 
 type Conversation = {
   id: string
@@ -462,6 +461,24 @@ async function sendMessage() {
   }
 }
 
+async function deleteActiveConversation() {
+  if (!activeId.value) return
+  const cid = Number(activeId.value)
+  const ok = window.confirm('Delete this conversation and all its messages?')
+  if (!ok) return
+  try {
+    await ChatApi.deleteConversation(cid)
+    // remove from local state
+    const idx = conversations.findIndex((c) => c.id === String(cid))
+    if (idx !== -1) conversations.splice(idx, 1)
+    delete threads[String(cid)]
+    activeId.value = null
+  } catch (e) {
+    // optionally surface error; for now, alert
+    alert((e as Error)?.message || 'Failed to delete conversation')
+  }
+}
+
 function onSelectEmoji(e: string) {
   msgInput.value += e
 }
@@ -799,16 +816,11 @@ async function dismissNotification(id: string) {
         </div>
         <div class="flex gap-2">
           <button
-            class="w-9 h-9 rounded-lg grid place-items-center bg-slate-100 cursor-pointer"
-            title="Search"
+            class="w-9 h-9 rounded-lg grid place-items-center bg-red-50 cursor-pointer border border-red-200 hover:bg-red-100"
+            title="Delete conversation"
+            @click="deleteActiveConversation"
           >
-            <MdiMagnify class="text-[18px] text-slate-700/85" />
-          </button>
-          <button
-            class="w-9 h-9 rounded-lg grid place-items-center bg-slate-100 cursor-pointer"
-            title="Favorite"
-          >
-            <MdiHeartOutline class="text-[18px] text-slate-700/85" />
+            <MdiTrashCanOutline class="text-[18px] text-red-600" />
           </button>
         </div>
       </header>
