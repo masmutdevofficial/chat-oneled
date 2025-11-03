@@ -301,7 +301,7 @@ async function switchConversation(id: string) {
 
   try {
     const cid = Number(id)
-    const { items } = await ChatApi.listMessages(cid, 30)
+    const items = await ChatApi.listMessages(cid, 30)
     const mapped: ThreadItem[] = items
       .slice()
       .reverse()

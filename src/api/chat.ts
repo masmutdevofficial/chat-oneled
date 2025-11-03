@@ -39,6 +39,8 @@ export type MessageItem = {
 
 const BASE = import.meta.env.VITE_API_BASE || 'https://api-chat-oneled.masmut.dev'
 
+type ApiEnvelope<T> = { data: T; status: 'success' | 'error'; message: string }
+
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const token = localStorage.getItem('token')
   const extraHeaders = (init?.headers || {}) as Record<string, string>
@@ -46,12 +48,31 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
   if (token) headers['Authorization'] = `Bearer ${token}`
   const res = await fetch(`${BASE}${path}`, { headers, credentials: 'omit', ...init })
   if (!res.ok) {
-    const text = await res.text().catch(() => '')
-    throw new Error(`HTTP ${res.status}: ${text}`)
+    // Try to read standardized envelope even on errors
+    try {
+      const errJson = (await res.json()) as Partial<ApiEnvelope<unknown>>
+      if (errJson && typeof errJson === 'object' && 'message' in errJson) {
+        throw new Error(errJson.message || `HTTP ${res.status}`)
+      }
+    } catch {
+      // fall back to text
+      const text = await res.text().catch(() => '')
+      throw new Error(`HTTP ${res.status}: ${text}`)
+    }
   }
   // 204 no content
   if (res.status === 204) return undefined as unknown as T
-  return res.json() as Promise<T>
+  const json = await res.json().catch(() => null)
+  // Unwrap standardized envelope { data, status, message }
+  if (json && typeof json === 'object' && 'status' in json && 'data' in json) {
+    const env = json as ApiEnvelope<T>
+    if (env.status !== 'success') {
+      throw new Error(env.message || 'Request failed')
+    }
+    return env.data
+  }
+  // Fallback to raw JSON (backward compatibility)
+  return json as T
 }
 
 export const ChatApi = {
@@ -73,8 +94,9 @@ export const ChatApi = {
   },
   listMessages(conversationId: number, limit = 20, cursor?: string) {
     const q = new URLSearchParams({ limit: String(limit) })
+    // Cursor is currently not used by the backend; kept for forward compatibility
     if (cursor) q.set('cursor', cursor)
-    return http<{ items: MessageItem[]; nextCursor: string | null }>(`/api/conversations/${conversationId}/messages?${q}`)
+    return http<MessageItem[]>(`/api/conversations/${conversationId}/messages?${q}`)
   },
   sendMessage(conversationId: number, body: {
     body?: string
@@ -87,7 +109,7 @@ export const ChatApi = {
     })
   },
   markRead(conversationId: number) {
-    return http<void>(`/api/conversations/${conversationId}/read`, { method: 'POST' })
+    return http<unknown>(`/api/conversations/${conversationId}/read`, { method: 'POST' }).then(() => undefined)
   },
   unreadByConversation() {
     return http<Array<{ conversation_id: number; unread: number }>>(`/api/conversations/unread`)
@@ -97,6 +119,6 @@ export const ChatApi = {
     return http<Array<{ id: number; user_id: number; conversation_id: number | null; content: string; created_at: string; read_at: string | null }>>(`/api/notifications?${q}`)
   },
   readNotification(id: number) {
-    return http<void>(`/api/notifications/${id}/read`, { method: 'PATCH' })
+    return http<unknown>(`/api/notifications/${id}/read`, { method: 'PATCH' }).then(() => undefined)
   }
 }
