@@ -28,6 +28,7 @@ type Conversation = {
   isSuggestion?: boolean
   suggestUserId?: number
   avatar?: string | null
+  email?: string | null
 }
 
 type MessageStatus = 'sent' | 'delivered' | 'read'
@@ -142,6 +143,7 @@ function mapConversation(row: ConversationItem): Conversation {
     preview: preview || '',
     unread: Number(row.unread || 0),
     avatar: row.peer_avatar || null,
+    email: row.peer_email || null,
   }
 }
 
@@ -792,7 +794,7 @@ async function dismissNotification(id: string) {
                 title="Online"
               ></span>
             </div>
-            <div class="text-xs text-slate-500">{{ activePeer?.role || '—' }}</div>
+            <div class="text-xs text-slate-500">{{ activePeer?.email || '—' }}</div>
           </div>
         </div>
         <div class="flex gap-2">
@@ -1104,7 +1106,7 @@ async function dismissNotification(id: string) {
         <div class="text-center">
           <div class="font-bold">{{ activePeer?.name || 'Unknown' }}</div>
           <div class="text-xs text-slate-500 dark:text-slate-300 mt-0.5">
-            {{ activePeer?.role || '—' }}
+            {{ activePeer?.email || '—' }}
           </div>
         </div>
       </div>
