@@ -27,6 +27,7 @@ type Conversation = {
   // when this is a user suggestion (no existing conversation yet)
   isSuggestion?: boolean
   suggestUserId?: number
+  avatar?: string | null
 }
 
 type MessageStatus = 'sent' | 'delivered' | 'read'
@@ -140,6 +141,7 @@ function mapConversation(row: ConversationItem): Conversation {
     time: formatTime(row.last_message_created_at || row.updated_at),
     preview: preview || '',
     unread: Number(row.unread || 0),
+    avatar: row.peer_avatar || null,
   }
 }
 
@@ -675,7 +677,7 @@ async function dismissNotification(id: string) {
               : 'hover:bg-slate-100 dark:hover:bg-slate-700'
           "
         >
-          <img src="/profile.png" alt="Avatar" class="size-10 rounded-full object-cover" />
+          <img :src="c.avatar || '/profile.png'" alt="Avatar" class="size-10 rounded-full object-cover" />
           <div>
             <div class="font-semibold dark:text-slate-200">{{ c.name }}</div>
             <div class="text-xs text-slate-500 dark:text-slate-300 truncate">
@@ -738,7 +740,7 @@ async function dismissNotification(id: string) {
           "
         >
           <img
-            src="/profile.png"
+            :src="c.avatar || '/profile.png'"
             alt="Avatar"
             class="size-11 rounded-full object-cover"
             aria-hidden="true"
@@ -781,7 +783,7 @@ async function dismissNotification(id: string) {
         class="p-3.5 border-b border-slate-200 dark:border-slate-700 grid grid-cols-[1fr_auto] items-center gap-3 sticky top-0 z-10 bg-white dark:bg-slate-800"
       >
         <div class="grid grid-cols-[40px_1fr] items-center gap-2.5">
-          <img src="/profile.png" alt="Peer" class="size-10 rounded-full object-cover" />
+          <img :src="activePeer?.avatar || '/profile.png'" alt="Peer" class="size-10 rounded-full object-cover" />
           <div>
             <div class="font-semibold flex items-center gap-1.5">
               <span>{{ activePeer?.name || 'Unknown' }}</span>
@@ -1095,7 +1097,7 @@ async function dismissNotification(id: string) {
       </div>
       <div class="p-5 grid gap-3">
         <img
-          src="/profile.png"
+          :src="activePeer?.avatar || '/profile.png'"
           alt="Peer"
           class="size-20 rounded-full object-cover border-4 border-white dark:border-slate-700 mx-auto"
         />

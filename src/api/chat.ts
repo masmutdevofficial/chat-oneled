@@ -15,6 +15,8 @@ export type ConversationItem = {
   peer_user_id?: number | null
   peer_username?: string | null
   peer_avatar?: string | null
+  peer_email?: string | null
+  peer_role?: number | null
 }
 
 export type MessageAttachment = {
