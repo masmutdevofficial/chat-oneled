@@ -33,7 +33,26 @@ type Conversation = {
 type MessageStatus = 'sent' | 'delivered' | 'read'
 
 type Attachment = { type: 'image' | 'pdf'; url: string; name?: string; file?: File }
-type Notification = { id: string; name: string; text: string; time: string }
+// kind: unread-message = derived from unread chats, system = backend-provided
+type Notification = {
+  id: string
+  name: string
+  text: string
+  time: string
+  kind?: 'unread-message' | 'system'
+  // For unread-message notifications we keep the conversationId to mark read on dismiss
+  conversationId?: string
+}
+
+// Internal type for derived unread-message notifications
+type UnreadCandidate = {
+  id: string
+  name: string
+  text: string
+  time: string
+  kind: 'unread-message'
+  conversationId: string
+}
 
 type ThreadItem =
   | { divider: string }
@@ -106,6 +125,8 @@ onMounted(async () => {
   // Load initial data
   await loadConversations()
   await loadNotifications()
+  // Start polling every 10s for conversations/messages/notifications
+  startPolling()
 })
 
 // Notifications list (mutable)
@@ -152,17 +173,62 @@ async function loadConversations() {
 }
 
 async function loadNotifications() {
-  const rows = await ChatApi.notifications(20)
-  const nameByConv: Record<string, string> = Object.fromEntries(
-    conversations.map((c) => [c.id, c.name]),
-  )
-  const mapped: Notification[] = rows.map((n) => ({
-    id: String(n.id),
-    name: n.conversation_id ? (nameByConv[String(n.conversation_id)] || 'Conversation') : 'System',
-    text: n.content,
-    time: formatTime(n.created_at),
-  }))
-  notifications.splice(0, notifications.length, ...mapped)
+  // 1) Fetch backend-provided system notifications (if any)
+  let system: Notification[] = []
+  try {
+    const rows = await ChatApi.notifications(20)
+    const nameByConv: Record<string, string> = Object.fromEntries(
+      conversations.map((c) => [c.id, c.name]),
+    )
+    system = rows.map((n) => ({
+      id: String(n.id),
+      name: n.conversation_id
+        ? nameByConv[String(n.conversation_id)] || 'Conversation'
+        : 'System',
+      text: n.content,
+      time: formatTime(n.created_at),
+      kind: 'system',
+    }))
+  } catch {
+    system = []
+  }
+
+  // 2) Build unread-message notifications derived from conversations with unread > 0
+  const unreadConvs = conversations.filter((c) => Number(c.unread) > 0)
+  let unreadDerived: UnreadCandidate[] = []
+  if (unreadConvs.length) {
+    try {
+      const results = await Promise.all(
+        unreadConvs.map(async (c): Promise<UnreadCandidate | null> => {
+          try {
+            const cid = Number(c.id)
+            // Get a handful of latest messages to find the last one from peer
+            const items = await ChatApi.listMessages(cid, 5)
+            const lastFromPeer = items.find((m) => Number(m.sender_id) !== currentUserId.value)
+            if (!lastFromPeer) return null
+            const text = lastFromPeer.body || (lastFromPeer.attachments?.length ? '(Attachment)' : '')
+            return {
+              id: `unread-${c.id}`,
+              name: c.name,
+              text: text || '',
+              time: formatTime(lastFromPeer.created_at),
+              kind: 'unread-message' as const,
+              conversationId: c.id,
+            }
+          } catch {
+            return null
+          }
+        }),
+      )
+      unreadDerived = results.filter((x): x is UnreadCandidate => x !== null)
+    } catch {
+      unreadDerived = []
+    }
+  }
+
+  // 3) Merge: show unread messages first, then system ones
+  const merged: Notification[] = [...unreadDerived, ...system]
+  notifications.splice(0, notifications.length, ...merged)
 }
 
 const emojiList = [
@@ -288,6 +354,7 @@ const emojiList = [
 
 const activePeer = computed(() => conversations.find((c) => c.id === activeId.value))
 const activeThread = computed(() => (activeId.value ? (threads[activeId.value] ?? []) : []))
+const unreadMessageCount = computed(() => notifications.filter((n) => n.kind === 'unread-message').length)
 const filteredConversations = computed(() => {
   const q = searchQuery.value.trim().toLowerCase()
   if (!q) return conversations
@@ -327,6 +394,31 @@ async function switchConversation(id: string) {
     if (conv) conv.unread = 0
   } finally {
     isLoadingThread.value = false
+  }
+}
+
+// Refresh active thread without switching (polling)
+async function refreshActiveThread() {
+  if (!activeId.value) return
+  const cid = Number(activeId.value)
+  try {
+    const items = await ChatApi.listMessages(cid, 30)
+    const mapped: ThreadItem[] = items
+      .slice()
+      .reverse()
+      .map((m) => ({
+        side: m.sender_id === currentUserId.value ? 'right' : 'left',
+        text: m.body || undefined,
+        time: formatTime(m.created_at),
+        attachments: (m.attachments || []).map((a) => ({ type: a.type, url: a.url, name: a.file_name || undefined })),
+      }))
+    threads[activeId.value] = mapped
+    // Since conversation is open, mark as read
+    await ChatApi.markRead(cid)
+    const conv = conversations.find((c) => c.id === String(cid))
+    if (conv) conv.unread = 0
+  } catch {
+    // noop
   }
 }
 
@@ -540,6 +632,31 @@ onBeforeUnmount(() => {
   document.removeEventListener('click', handleGlobalClick)
 })
 
+// Polling lifecycle
+let pollTimer: number | null = null
+function startPolling() {
+  stopPolling()
+  pollTimer = window.setInterval(async () => {
+    try {
+      await loadConversations()
+      if (activeId.value) await refreshActiveThread()
+      await loadNotifications()
+    } catch {
+      // ignore polling errors
+    }
+  }, 10000)
+}
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
+onBeforeUnmount(() => {
+  stopPolling()
+})
+
 function toggleEmoji() {
   showEmoji.value = !showEmoji.value
   showAttach.value = false
@@ -580,10 +697,18 @@ function confirmLogout() {
 const latestNotifications = computed(() => notifications.slice(0, 5))
 
 async function dismissNotification(id: string) {
+  const n = notifications.find((x) => x.id === id)
   try {
-    await ChatApi.readNotification(Number(id))
+    if (n?.kind === 'unread-message' && n.conversationId) {
+      await ChatApi.markRead(Number(n.conversationId))
+      // Also zero unread for that conversation locally
+      const conv = conversations.find((c) => c.id === n.conversationId)
+      if (conv) conv.unread = 0
+    } else {
+      await ChatApi.readNotification(Number(id))
+    }
   } finally {
-    const i = notifications.findIndex((n) => n.id === id)
+    const i = notifications.findIndex((x) => x.id === id)
     if (i !== -1) notifications.splice(i, 1)
   }
 }
@@ -616,10 +741,10 @@ async function dismissNotification(id: string) {
           >
             <MdiBellOutline class="text-[18px] text-slate-700/85 dark:text-slate-200" />
             <span
-              v-if="notifications.length"
+              v-if="unreadMessageCount"
               class="absolute -top-1 -right-1 min-w-5 h-5 px-1 rounded-full bg-red-500 text-white text-[10px] grid place-items-center animate-pulse-slow"
             >
-              {{ notifications.length > 99 ? '99+' : notifications.length }}
+              {{ unreadMessageCount > 99 ? '99+' : unreadMessageCount }}
             </span>
           </button>
           <div
