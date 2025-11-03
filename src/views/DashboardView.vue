@@ -24,6 +24,9 @@ type Conversation = {
   time: string
   preview: string
   unread: number
+  // when this is a user suggestion (no existing conversation yet)
+  isSuggestion?: boolean
+  suggestUserId?: number
 }
 
 type MessageStatus = 'sent' | 'delivered' | 'read'
@@ -49,6 +52,8 @@ type ThreadItem =
 
 // Conversations loaded from backend
 const conversations = reactive<Conversation[]>([])
+// Fallback: suggested users when there are no conversations yet
+const userSuggestions = reactive<Conversation[]>([])
 
 // Cache of message threads by conversation id (string)
 const threads = reactive<Record<string, ThreadItem[]>>({})
@@ -143,6 +148,35 @@ function mapConversation(row: ConversationItem): Conversation {
 async function loadConversations() {
   const list = await ChatApi.listConversations()
   conversations.splice(0, conversations.length, ...list.map(mapConversation))
+  if (conversations.length === 0) {
+    await loadUsersFallback()
+  } else {
+    userSuggestions.splice(0, userSuggestions.length)
+  }
+}
+
+async function loadUsersFallback() {
+  try {
+    const users = await ChatApi.usersList(100, 0)
+    const mapped: Conversation[] = (users || [])
+      .filter((u) => u && (u.username || u.email))
+      .map((u) => {
+        const uname = u.username || (u.email ? u.email.split('@')[0] : 'User')
+        return {
+          id: `user-${u.id}`,
+          name: String(uname),
+          initials: nameInitials(String(uname)),
+          time: '',
+          preview: u.email || '',
+          unread: 0,
+          isSuggestion: true,
+          suggestUserId: Number(u.id),
+        }
+      })
+    userSuggestions.splice(0, userSuggestions.length, ...mapped)
+  } catch {
+    // ignore suggestion failures
+  }
 }
 
 async function loadNotifications() {
@@ -284,8 +318,10 @@ const activePeer = computed(() => conversations.find((c) => c.id === activeId.va
 const activeThread = computed(() => (activeId.value ? (threads[activeId.value] ?? []) : []))
 const filteredConversations = computed(() => {
   const q = searchQuery.value.trim().toLowerCase()
-  if (!q) return conversations
-  return conversations.filter(
+  // If there are no conversations yet, show user suggestions (to start a chat)
+  const base = conversations.length === 0 ? userSuggestions : conversations
+  if (!q) return base
+  return base.filter(
     (c) => c.name.toLowerCase().includes(q) || (c.preview || '').toLowerCase().includes(q),
   )
 })
@@ -322,6 +358,21 @@ async function switchConversation(id: string) {
   } finally {
     isLoadingThread.value = false
   }
+}
+
+async function onClickConversation(c: Conversation) {
+  if (c.isSuggestion && c.suggestUserId) {
+    // Create (or reuse) a direct conversation with this user, then switch to it
+    try {
+      const created = await ChatApi.createConversation({ type: 'direct', participantUserIds: [c.suggestUserId] })
+      const newId = String(created?.id)
+      // Refresh conversations and switch
+      await loadConversations()
+      if (newId) await switchConversation(newId)
+    } catch {}
+    return
+  }
+  await switchConversation(c.id)
 }
 
 function truncate(text: string, len: number) {
@@ -494,6 +545,10 @@ function cancelLogout() {
 
 function confirmLogout() {
   isLogoutOpen.value = false
+  try {
+    localStorage.removeItem('token')
+    localStorage.removeItem('authUser')
+  } catch {}
   router.push('/')
 }
 
@@ -609,7 +664,7 @@ async function dismissNotification(id: string) {
         <button
           v-for="c in filteredConversations"
           :key="c.id"
-          @click="switchConversation(c.id)"
+          @click="onClickConversation(c)"
           class="grid grid-cols-[40px_1fr_auto] gap-2 p-2 rounded-xl items-center w-full text-left cursor-pointer"
           :class="
             c.id === activeId
@@ -649,8 +704,8 @@ async function dismissNotification(id: string) {
       <div class="grid grid-cols-[48px_1fr_auto] items-center gap-3 p-4 border-b border-slate-200">
         <img src="/profile.png" alt="Me" class="size-12 rounded-full object-cover" />
         <div>
-          <div class="font-bold">David Peters</div>
-          <div class="text-xs text-slate-500">Senior Developer</div>
+          <div class="font-bold">{{ savedUser?.username || '—' }}</div>
+          <div class="text-xs text-slate-500">{{ savedUser?.email || '' }}</div>
         </div>
         <button class="text-slate-600/80 cursor-pointer" title="Edit">
           <MdiPencilOutline class="text-[20px]" />
@@ -668,7 +723,7 @@ async function dismissNotification(id: string) {
         <button
           v-for="c in filteredConversations"
           :key="c.id"
-          @click="switchConversation(c.id)"
+          @click="onClickConversation(c)"
           class="grid grid-cols-[44px_1fr_auto] gap-2 p-2.5 rounded-xl items-center w-full text-left cursor-pointer"
           :class="
             c.id === activeId
