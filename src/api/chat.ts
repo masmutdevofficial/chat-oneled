@@ -78,9 +78,16 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const ChatApi = {
   login(email: string, password: string) {
-    return http<{ token: string; user: { id: number; email: string; username: string; role: number } }>(`/auth/login`, {
+    type LoginPayload = { token: string; user: { id: number; email: string; username: string; role: number } }
+    return http<LoginPayload | LoginPayload[]>(`/auth/login`, {
       method: 'POST',
       body: JSON.stringify({ email, password }),
+    }).then((d) => {
+      const out = Array.isArray(d) ? d[0] : d
+      if (!out || typeof out !== 'object' || !('token' in out)) {
+        throw new Error('Invalid login response')
+      }
+      return out as LoginPayload
     })
   },
   listConversations(limit = 30, offset = 0) {
@@ -88,10 +95,11 @@ export const ChatApi = {
     return http<ConversationItem[]>(`/api/conversations?${q}`)
   },
   createConversation(body: { type: 'direct' | 'group'; title?: string; participantUserIds?: number[] }) {
-    return http<{ id: number }>(`/api/conversations`, {
+    type Created = { id: number }
+    return http<Created | Created[]>(`/api/conversations`, {
       method: 'POST',
       body: JSON.stringify(body),
-    })
+    }).then((d) => (Array.isArray(d) ? (d[0] as Created) : d))
   },
   listMessages(conversationId: number, limit = 20, cursor?: string) {
     const q = new URLSearchParams({ limit: String(limit) })
@@ -104,10 +112,11 @@ export const ChatApi = {
     replyToMessageId?: number
     attachments?: MessageAttachment[]
   }) {
-    return http<{ id: number }>(`/api/conversations/${conversationId}/messages`, {
+    type Created = { id: number }
+    return http<Created | Created[]>(`/api/conversations/${conversationId}/messages`, {
       method: 'POST',
       body: JSON.stringify(body),
-    })
+    }).then((d) => (Array.isArray(d) ? (d[0] as Created) : d))
   },
   markRead(conversationId: number) {
     return http<unknown>(`/api/conversations/${conversationId}/read`, { method: 'POST' }).then(() => undefined)
