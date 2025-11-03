@@ -48,17 +48,18 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
   if (token) headers['Authorization'] = `Bearer ${token}`
   const res = await fetch(`${BASE}${path}`, { headers, credentials: 'omit', ...init })
   if (!res.ok) {
-    // Try to read standardized envelope even on errors
+    // Try to read standardized envelope even on errors, without swallowing the error
+    let errJson: Partial<ApiEnvelope<unknown>> | null = null
     try {
-      const errJson = (await res.json()) as Partial<ApiEnvelope<unknown>>
-      if (errJson && typeof errJson === 'object' && 'message' in errJson) {
-        throw new Error(errJson.message || `HTTP ${res.status}`)
-      }
-    } catch {
-      // fall back to text
-      const text = await res.text().catch(() => '')
-      throw new Error(`HTTP ${res.status}: ${text}`)
+      errJson = (await res.json()) as Partial<ApiEnvelope<unknown>>
+    } catch {}
+    if (errJson && typeof errJson === 'object' && 'message' in errJson!) {
+      const msg = (errJson as Record<string, unknown>).message
+      throw new Error(typeof msg === 'string' && msg.trim() ? msg : `HTTP ${res.status}`)
     }
+    // fall back to text if not JSON/envelope
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
   }
   // 204 no content
   if (res.status === 204) return undefined as unknown as T
