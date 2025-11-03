@@ -46,7 +46,12 @@ type ApiEnvelope<T> = { data: T; status: 'success' | 'error'; message: string }
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const token = localStorage.getItem('token')
   const extraHeaders = (init?.headers || {}) as Record<string, string>
-  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...extraHeaders }
+  const headers: Record<string, string> = { ...extraHeaders }
+  // Only set JSON content-type when a body is provided
+  const initBody = (init as RequestInit | undefined)?.body ?? undefined
+  if (typeof initBody !== 'undefined' && initBody !== null && headers['Content-Type'] === undefined) {
+    headers['Content-Type'] = 'application/json'
+  }
   if (token) headers['Authorization'] = `Bearer ${token}`
   const res = await fetch(`${BASE}${path}`, { headers, credentials: 'omit', ...init })
   if (!res.ok) {
