@@ -52,8 +52,6 @@ type ThreadItem =
 
 // Conversations loaded from backend
 const conversations = reactive<Conversation[]>([])
-// Fallback: suggested users when there are no conversations yet
-const userSuggestions = reactive<Conversation[]>([])
 
 // Cache of message threads by conversation id (string)
 const threads = reactive<Record<string, ThreadItem[]>>({})
@@ -148,35 +146,6 @@ function mapConversation(row: ConversationItem): Conversation {
 async function loadConversations() {
   const list = await ChatApi.listConversations()
   conversations.splice(0, conversations.length, ...list.map(mapConversation))
-  if (conversations.length === 0) {
-    await loadUsersFallback()
-  } else {
-    userSuggestions.splice(0, userSuggestions.length)
-  }
-}
-
-async function loadUsersFallback() {
-  try {
-    const users = await ChatApi.usersList(100, 0)
-    const mapped: Conversation[] = (users || [])
-      .filter((u) => u && (u.username || u.email))
-      .map((u) => {
-        const uname = u.username || (u.email ? u.email.split('@')[0] : 'User')
-        return {
-          id: `user-${u.id}`,
-          name: String(uname),
-          initials: nameInitials(String(uname)),
-          time: '',
-          preview: u.email || '',
-          unread: 0,
-          isSuggestion: true,
-          suggestUserId: Number(u.id),
-        }
-      })
-    userSuggestions.splice(0, userSuggestions.length, ...mapped)
-  } catch {
-    // ignore suggestion failures
-  }
 }
 
 async function loadNotifications() {
@@ -318,10 +287,8 @@ const activePeer = computed(() => conversations.find((c) => c.id === activeId.va
 const activeThread = computed(() => (activeId.value ? (threads[activeId.value] ?? []) : []))
 const filteredConversations = computed(() => {
   const q = searchQuery.value.trim().toLowerCase()
-  // If there are no conversations yet, show user suggestions (to start a chat)
-  const base = conversations.length === 0 ? userSuggestions : conversations
-  if (!q) return base
-  return base.filter(
+  if (!q) return conversations
+  return conversations.filter(
     (c) => c.name.toLowerCase().includes(q) || (c.preview || '').toLowerCase().includes(q),
   )
 })
@@ -360,19 +327,48 @@ async function switchConversation(id: string) {
   }
 }
 
-async function onClickConversation(c: Conversation) {
-  if (c.isSuggestion && c.suggestUserId) {
-    // Create (or reuse) a direct conversation with this user, then switch to it
-    try {
-      const created = await ChatApi.createConversation({ type: 'direct', participantUserIds: [c.suggestUserId] })
-      const newId = String(created?.id)
-      // Refresh conversations and switch
-      await loadConversations()
-      if (newId) await switchConversation(newId)
-    } catch {}
-    return
+// New Chat modal state and logic
+const isNewChatOpen = ref(false)
+const newChatLoading = ref(false)
+type NewChatUser = { id: number; username: string | null; email: string | null; avatar: string | null; role: number }
+const newChatUsers = reactive<NewChatUser[]>([])
+const newChatQuery = ref('')
+const filteredNewChatUsers = computed(() => {
+  const q = newChatQuery.value.trim().toLowerCase()
+  const base = newChatUsers
+    .filter((u) => Number(u.id) !== currentUserId.value)
+    .filter((u) => Number(u.role) !== 1)
+  if (!q) return base
+  return base.filter((u) => (u.username || '').toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q))
+})
+
+async function openNewChat() {
+  isNewChatOpen.value = true
+  newChatLoading.value = true
+  try {
+    const rows = await ChatApi.usersList(200, 0)
+    newChatUsers.splice(0, newChatUsers.length, ...rows)
+  } catch {
+    newChatUsers.splice(0, newChatUsers.length)
+  } finally {
+    newChatLoading.value = false
   }
-  await switchConversation(c.id)
+}
+
+function closeNewChat() {
+  isNewChatOpen.value = false
+  newChatQuery.value = ''
+}
+
+async function startNewChatWith(uid: number) {
+  try {
+    const created = await ChatApi.createConversation({ type: 'direct', participantUserIds: [uid] })
+    closeNewChat()
+    await loadConversations()
+    if (created?.id) await switchConversation(String(created.id))
+  } catch {
+    // optionally show toast
+  }
 }
 
 function truncate(text: string, len: number) {
@@ -635,6 +631,13 @@ async function dismissNotification(id: string) {
             </ul>
           </div>
         </div>
+        <!-- New Chat -->
+        <button
+          class="h-9 rounded-lg px-3 bg-blue-600 text-white font-medium cursor-pointer"
+          @click="openNewChat"
+        >
+          New Chat
+        </button>
         <!-- Logout -->
         <button
           class="h-9 rounded-lg px-3 bg-red-500 text-white font-medium cursor-pointer"
@@ -664,7 +667,7 @@ async function dismissNotification(id: string) {
         <button
           v-for="c in filteredConversations"
           :key="c.id"
-          @click="onClickConversation(c)"
+          @click="switchConversation(c.id)"
           class="grid grid-cols-[40px_1fr_auto] gap-2 p-2 rounded-xl items-center w-full text-left cursor-pointer"
           :class="
             c.id === activeId
@@ -689,6 +692,9 @@ async function dismissNotification(id: string) {
             <MdiCheckAll v-else class="text-[16px] text-slate-500/70" aria-hidden="true" />
           </div>
         </button>
+        <div v-if="!filteredConversations.length" class="text-sm text-slate-500 text-center py-6">
+          No Data Available
+        </div>
       </div>
     </div>
   </div>
@@ -723,7 +729,7 @@ async function dismissNotification(id: string) {
         <button
           v-for="c in filteredConversations"
           :key="c.id"
-          @click="onClickConversation(c)"
+          @click="switchConversation(c.id)"
           class="grid grid-cols-[44px_1fr_auto] gap-2 p-2.5 rounded-xl items-center w-full text-left cursor-pointer"
           :class="
             c.id === activeId
@@ -753,6 +759,9 @@ async function dismissNotification(id: string) {
             <MdiCheckAll v-else class="text-[16px] text-slate-500/70" aria-hidden="true" />
           </div>
         </button>
+        <div v-if="!filteredConversations.length" class="text-sm text-slate-500 text-center py-6">
+          No Data Available
+        </div>
       </div>
     </aside>
 
@@ -1163,6 +1172,54 @@ async function dismissNotification(id: string) {
         </button>
         <button class="px-3 py-2 rounded-lg bg-red-500 text-white" @click="confirmLogout">
           Logout
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- New Chat Modal -->
+  <div
+    v-if="isNewChatOpen"
+    class="fixed inset-0 z-100 grid place-items-center bg-black/30 backdrop-blur-sm"
+    @click="closeNewChat"
+  >
+    <div
+      class="w-[92vw] max-w-lg bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 overflow-hidden"
+      @click.stop
+    >
+      <div class="px-4 py-3 border-b border-slate-200 dark:border-slate-700 font-semibold dark:text-slate-200">
+        Start New Chat
+      </div>
+      <div class="p-4 grid gap-3">
+        <input
+          v-model="newChatQuery"
+          type="search"
+          placeholder="Search user..."
+          class="w-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2.5 rounded-xl text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-400"
+        />
+        <div class="max-h-80 overflow-auto divide-y divide-slate-200 dark:divide-slate-700">
+          <div v-if="newChatLoading" class="p-3 text-sm text-slate-500">Loading...</div>
+          <button
+            v-for="u in filteredNewChatUsers"
+            :key="u.id"
+            class="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-700 grid grid-cols-[40px_1fr_auto] gap-3 items-center cursor-pointer"
+            @click="startNewChatWith(u.id)"
+          >
+            <img src="/profile.png" class="size-9 rounded-full object-cover" alt="Avatar" />
+            <div>
+              <div class="text-sm font-medium dark:text-slate-100">{{ u.username || (u.email ? u.email.split('@')[0] : 'User') }}</div>
+              <div class="text-xs text-slate-500 dark:text-slate-300">{{ u.email }}</div>
+            </div>
+            <span class="text-[11px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">Active</span>
+          </button>
+          <div v-if="!newChatLoading && !filteredNewChatUsers.length" class="p-3 text-sm text-slate-500 text-center">
+            No users found
+          </div>
+        </div>
+      </div>
+      <div class="px-4 py-3 flex justify-end gap-2 border-t border-slate-200 dark:border-slate-700">
+        <button class="px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-700" @click="closeNewChat">
+          Close
         </button>
       </div>
     </div>

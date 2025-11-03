@@ -93,7 +93,7 @@ export const ChatApi = {
   usersList(limit = 100, offset = 0, q?: string) {
     const qs = new URLSearchParams({ limit: String(limit), offset: String(offset) })
     if (q && q.trim()) qs.set('q', q.trim())
-    return http<Array<{ id: number; username: string | null; email: string | null; avatar: string | null }>>(`/api/users?${qs}`)
+    return http<Array<{ id: number; username: string | null; email: string | null; avatar: string | null; role: number }>>(`/api/users?${qs}`)
   },
   listConversations(limit = 30, offset = 0) {
     const q = new URLSearchParams({ limit: String(limit), offset: String(offset) })
