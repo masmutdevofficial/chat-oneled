@@ -133,6 +133,15 @@ export const ChatApi = {
       body: JSON.stringify(body),
     }).then((d) => (Array.isArray(d) ? (d[0] as Created) : d))
   },
+  uploadAttachment(file: File) {
+    const fd = new FormData()
+    fd.append('file', file)
+    return http<Array<{ url: string; file_name: string; mime_type: string; byte_size: number }>>(`/api/uploads`, {
+      method: 'POST',
+      body: fd,
+      // do not set Content-Type; browser sets multipart boundary
+    }).then((d) => (Array.isArray(d) ? d[0] : d) as { url: string; file_name: string; mime_type: string; byte_size: number })
+  },
   markRead(conversationId: number) {
     return http<unknown>(`/api/conversations/${conversationId}/read`, { method: 'POST' }).then(() => undefined)
   },

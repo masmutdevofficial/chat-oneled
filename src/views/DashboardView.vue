@@ -32,7 +32,7 @@ type Conversation = {
 
 type MessageStatus = 'sent' | 'delivered' | 'read'
 
-type Attachment = { type: 'image' | 'pdf'; url: string; name?: string }
+type Attachment = { type: 'image' | 'pdf'; url: string; name?: string; file?: File }
 type Notification = { id: string; name: string; text: string; time: string }
 
 type ThreadItem =
@@ -388,7 +388,7 @@ function onPickImages(files: FileList | null) {
     if (!accepted.includes(f.type)) continue
     if (f.size > 2 * 1024 * 1024) continue
     const url = URL.createObjectURL(f)
-    curr.push({ type: 'image', url, name: f.name })
+  curr.push({ type: 'image', url, name: f.name, file: f })
   }
   selectedFiles.value = curr.slice(0, 3)
 }
@@ -401,7 +401,7 @@ function onPickPdf(files: FileList | null) {
     if (f.type !== 'application/pdf') continue
     if (f.size > 2 * 1024 * 1024) continue
     const url = URL.createObjectURL(f)
-    curr.push({ type: 'pdf', url, name: f.name })
+  curr.push({ type: 'pdf', url, name: f.name, file: f })
   }
   selectedFiles.value = curr.slice(0, 3)
 }
@@ -430,10 +430,18 @@ async function sendMessage() {
   }) - 1
 
   try {
-    const atts: MessageAttachment[] | undefined = selectedFiles.value.length
-      ? selectedFiles.value.map((a) => ({ type: a.type, url: a.url, file_name: a.name }))
-      : undefined
-  await ChatApi.sendMessage(cid, { body: text || undefined, attachments: atts })
+    let atts: MessageAttachment[] | undefined = undefined
+    if (selectedFiles.value.length) {
+      // Upload files first to get server URLs
+      const uploaded = await Promise.all(selectedFiles.value.map(async (a) => {
+        const up = a.file
+          ? await ChatApi.uploadAttachment(a.file)
+          : { url: a.url, file_name: a.name || '', mime_type: a.type === 'image' ? 'image/*' : 'application/pdf', byte_size: 0 }
+        return { type: a.type, url: up.url, file_name: up.file_name, mime_type: up.mime_type, byte_size: up.byte_size }
+      }))
+      atts = uploaded
+    }
+    await ChatApi.sendMessage(cid, { body: text || undefined, attachments: atts })
 
     // update conversation preview/time
     const conv = conversations.find((c) => c.id === activeId.value)
