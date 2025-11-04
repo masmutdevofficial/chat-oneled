@@ -1297,7 +1297,7 @@ async function dismissNotification(id: string) {
     <!-- RIGHT -->
     <aside
       v-if="activePeer"
-      class="col-span-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-lg overflow-hidden min-h-0 xl:flex flex-col"
+      class="col-span-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-lg overflow-hidden min-h-0 hidden xl:flex flex-col"
     >
       <div class="p-4 border-b border-slate-200 dark:border-slate-700">
         <input
