@@ -468,7 +468,6 @@ const filteredNewChatUsers = computed(() => {
   const q = newChatQuery.value.trim().toLowerCase()
   const base = newChatUsers
     .filter((u) => Number(u.id) !== currentUserId.value)
-    .filter((u) => Number(u.role) !== 1)
   if (!q) return base
   return base.filter((u) => (u.username || '').toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q))
 })
